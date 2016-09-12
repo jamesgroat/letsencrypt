@@ -653,12 +653,15 @@ func (m *Manager) verify(host string) (cert *tls.Certificate, refreshTime time.T
 	if err = c.SetChallengeProvider(acme.TLSSNI01, tlsProvider{m}); err != nil {
 		return
 	}
-	c.SetChallengeProvider(acme.TLSSNI01, tlsProvider{m})
-	c.ExcludeChallenges([]acme.Challenge{acme.HTTP01})
-
-	for k, v := range m.providers {
-		if err = c.SetChallengeProvider(k, v); err != nil {
-			return
+	if len(m.providers) == 0 {
+		c.SetChallengeProvider(acme.TLSSNI01, tlsProvider{m})
+		c.ExcludeChallenges([]acme.Challenge{acme.HTTP01})
+	} else {
+		c.ExcludeChallenges([]acme.Challenge{acme.HTTP01, acme.TLSSNI01, acme.DNS01})
+		for k, v := range m.providers {
+			if err = c.SetChallengeProvider(k, v); err != nil {
+				return
+			}
 		}
 	}
 
