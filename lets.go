@@ -187,6 +187,7 @@ type Manager struct {
 	certCache    map[string]*cacheEntry
 	certTokens   map[string]*tls.Certificate
 	watchChan    chan struct{}
+	providers    map[acme.Challenge]acme.ChallengeProvider
 }
 
 // Serve runs an HTTP/HTTPS web server using TLS certificates obtained by the manager.
@@ -284,6 +285,7 @@ func (m *Manager) init() {
 		m.certTokens = map[string]*tls.Certificate{}
 		m.watchChan = make(chan struct{}, 1)
 		m.watchChan <- struct{}{}
+		m.providers = map[acme.Challenge]acme.ChallengeProvider{}
 	}
 	m.mu.Unlock()
 }
@@ -319,6 +321,8 @@ func (m *Manager) updated() {
 	}
 }
 
+// CacheFile reads the saved state from the file name and then
+// listens to Watch() channel to write state updates to file
 func (m *Manager) CacheFile(name string) error {
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
@@ -474,6 +478,14 @@ func (m *Manager) SetHosts(hosts []string) {
 	m.state.Hosts = append(m.state.Hosts[:0], hosts...)
 	m.mu.Unlock()
 	m.updated()
+}
+
+// SetChallengeProvider specifies a custom provider that will make the solution available
+func (m *Manager) SetChallengeProvider(challenge acme.Challenge, p acme.ChallengeProvider) {
+	m.init()
+	m.mu.Lock()
+	m.providers[challenge] = p
+	m.mu.Unlock()
 }
 
 // GetCertificate can be placed a tls.Config's GetCertificate field to make
@@ -643,6 +655,13 @@ func (m *Manager) verify(host string) (cert *tls.Certificate, refreshTime time.T
 	}
 	c.SetChallengeProvider(acme.TLSSNI01, tlsProvider{m})
 	c.ExcludeChallenges([]acme.Challenge{acme.HTTP01})
+
+	for k, v := range m.providers {
+		if err = c.SetChallengeProvider(k, v); err != nil {
+			return
+		}
+	}
+
 	acmeCert, errmap := c.ObtainCertificate([]string{host}, true, nil)
 	if len(errmap) > 0 {
 		if debug {
@@ -660,7 +679,6 @@ func (m *Manager) verify(host string) (cert *tls.Certificate, refreshTime time.T
 		if debug {
 			log.Printf("ObtainCertificate %v toTLS failure: %v", host, err)
 		}
-		err = err
 		return
 	}
 	if refreshTime, err = certRefreshTime(cert); err != nil {
@@ -700,7 +718,7 @@ type tlsProvider struct {
 }
 
 func (p tlsProvider) Present(domain, token, keyAuth string) error {
-	cert, dom, err := acme.TLSSNI01ChallengeCertDomain(keyAuth)
+	cert, dom, err := acme.TLSSNI01ChallengeCert(keyAuth)
 	if err != nil {
 		return err
 	}
@@ -713,7 +731,7 @@ func (p tlsProvider) Present(domain, token, keyAuth string) error {
 }
 
 func (p tlsProvider) CleanUp(domain, token, keyAuth string) error {
-	_, dom, err := acme.TLSSNI01ChallengeCertDomain(keyAuth)
+	_, dom, err := acme.TLSSNI01ChallengeCert(keyAuth)
 	if err != nil {
 		return err
 	}
